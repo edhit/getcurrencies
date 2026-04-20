@@ -87,13 +87,13 @@ async function getCurrencyRates(force = false) {
             console.error("Ошибка чтения файла кеша:", fileErr.message);
         }
 
-        const sarrub = formatValue(newData["SARRUB"]) + getTrend(newData["SARRUB"], oldData["SARRUB"]);
-        const usdrub = formatValue(newData["USDRUB"]) + getTrend(newData["USDRUB"], oldData["USDRUB"]);
-        const usdsar = formatValue2(newData["USDSAR"]) + getTrend(newData["USDSAR"], oldData["USDSAR"]);
+        const sarrub = formatValue(newData["SARRUB"]);
+        const usdrub = formatValue(newData["USDRUB"]);
+        const usdsar = formatValue2(newData["USDSAR"]);
 
-        const sarkgs = formatValue(newData["SARKGS"]) + getTrend(newData["SARKGS"], oldData["SARKGS"]);
-        const sarkzt = formatValue(newData["SARKZT"]) + getTrend(newData["SARKZT"], oldData["SARKZT"]);
-        const saruzs = formatValue(newData["SARUZS"]) + getTrend(newData["SARUZS"], oldData["SARUZS"]);
+        const sarkgs = formatValue(newData["SARKGS"]);
+        const sarkzt = formatValue(newData["SARKZT"]);
+        const saruzs = formatValue(newData["SARUZS"]);
 
         try {
             fs.writeFileSync(DB_FILE, JSON.stringify(newData, null, 2));
