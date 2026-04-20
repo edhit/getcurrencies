@@ -14,6 +14,30 @@ const sheets = google.sheets({ version: "v4", auth: API_KEY });
 
 let cache = { text: "", lastUpdated: 0 };
 
+function readDb() {
+    try {
+        if (fs.existsSync(DB_FILE)) {
+            return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+        }
+    } catch (e) {
+        console.error("Ошибка чтения БД:", e.message);
+    }
+    return { rates: {}, lastMessageTime: 0 };
+}
+
+// Функция для записи данных в файл
+function writeDb(rates, lastMessageTime) {
+    try {
+        const data = {
+            rates: rates,
+            lastMessageTime: lastMessageTime || readDb().lastMessageTime
+        };
+        fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+    } catch (e) {
+        console.error("Ошибка записи в БД:", e.message);
+    }
+}
+
 // Парсинг списка админов из .env (например, ADMIN_USER_ID=123,456)
 const ADMINS = process.env.ADMIN_USER_ID 
     ? process.env.ADMIN_USER_ID.split(',').map(id => parseInt(id.trim())) 
@@ -78,28 +102,15 @@ async function getCurrencyRates(force = false) {
             if (pair && value) newData[pair.trim()] = value.trim();
         });
 
-        let oldData = {};
-        try {
-            if (fs.existsSync(DB_FILE)) {
-                oldData = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-            }
-        } catch (fileErr) {
-            console.error("Ошибка чтения файла кеша:", fileErr.message);
-        }
+        // Сохраняем только курсы, время сообщения не трогаем здесь
+        writeDb(newData);
 
         const sarrub = formatValue(newData["SARRUB"]);
         const usdrub = formatValue(newData["USDRUB"]);
         const usdsar = formatValue2(newData["USDSAR"]);
-
         const sarkgs = formatValue(newData["SARKGS"]);
         const sarkzt = formatValue(newData["SARKZT"]);
         const saruzs = formatValue(newData["SARUZS"]);
-
-        try {
-            fs.writeFileSync(DB_FILE, JSON.stringify(newData, null, 2));
-        } catch (saveErr) {
-            console.error("Ошибка сохранения кеша:", saveErr.message);
-        }
 
         const timeStr = new Date().toLocaleString('ru-RU', { 
             timeZone: 'Asia/Riyadh',
@@ -114,7 +125,7 @@ async function getCurrencyRates(force = false) {
         message += `🇸🇦 1 SAR = <b>${sarkgs}</b> KGS 🇰🇬\n`;
         message += `🇸🇦 1 SAR = <b>${sarkzt}</b> KZT 🇰🇿\n`;
         message += `🇸🇦 1 SAR = <b>${saruzs}</b> UZS 🇺🇿\n\n`;
-        message += `<tg-emoji emoji-id=\"5462878403973619446\">🏳️‍🌈</tg-emoji> Курс <b>Google</b>\n\n`;
+        message += `📊 Курс Google\n\n`;
         message += `<i>📊 Обновлено: ${timeStr}</i>\n`;
         
         cache.text = message;
@@ -122,8 +133,7 @@ async function getCurrencyRates(force = false) {
 
         return { text: message, updated: true };
     } catch (error) {
-        console.error("Ошибка Google Sheets API:", error.message);
-        return { text: cache.text || "⚠️ Ошибка получения данных. Попробуйте позже.", updated: false };
+        return { text: cache.text || "⚠️ Ошибка данных.", updated: false };
     }
 }
 
@@ -147,74 +157,53 @@ const adminOnly = async (ctx, next) => {
         console.error("Ошибка в middleware adminOnly:", e.message);
     }
 };
-
 bot.command("rates", adminOnly, async (ctx) => {
-    try {
-        const result = await getCurrencyRates(true);
-        await ctx.reply(result.text, { reply_markup: keyboard, parse_mode: "HTML", entities: [{type: "custom_emoji", emoji_id: "🏳️‍🌈", "custom_emoji_id": "5462878403973619446"}] });
-    } catch (e) {
-        console.error("Ошибка в команде /rates:", e.message);
-    }
+    const result = await getCurrencyRates(true);
+    const sentMsg = await ctx.reply(result.text, { reply_markup: keyboard, parse_mode: "HTML" });
+    
+    // Сохраняем время отправки нового сообщения в JSON
+    const db = readDb();
+    writeDb(db.rates, Date.now());
 });
 
 bot.callbackQuery("refresh_rates", async (ctx) => {
     try {
         const result = await getCurrencyRates();
+        const db = readDb();
+        const now = Date.now();
+        const FORTY_SEVEN_HOURS = 47 * 60 * 60 * 1000;
 
-        // Если данные в кеше еще свежие
-        if (!result.updated) {
-            return await ctx.answerCallbackQuery({
-                text: "✅ Данные актуальны",
-                show_alert: false 
-            });
+        const isTooOld = (now - (db.lastMessageTime || 0)) > FORTY_SEVEN_HOURS;
+
+        if (!result.updated && !isTooOld) {
+            return await ctx.answerCallbackQuery({ text: "✅ Актуально" });
         }
 
-        // Попытка просто обновить старое сообщение
+        if (isTooOld) {
+            // Удаляем старое сообщение (опционально), чтобы не засорять чат
+            await ctx.deleteMessage().catch(() => {});
+            
+            const sentMsg = await ctx.reply(result.text, { 
+                reply_markup: keyboard, 
+                parse_mode: "HTML" 
+            });
+            
+            writeDb(db.rates, now); // Фиксируем новое время в JSON
+            await ctx.pinChatMessage(sentMsg.message_id).catch(() => {});
+            return await ctx.answerCallbackQuery({ text: "🔄 Сообщение пересоздано" });
+        }
+
         await ctx.editMessageText(result.text, { 
             reply_markup: keyboard, 
             parse_mode: "HTML" 
         });
-        
         await ctx.answerCallbackQuery({ text: "✅ Обновлено" });
 
     } catch (e) {
-        const desc = e.description || "";
-
-        if (desc.includes("message is not modified")) {
+        if (e.description?.includes("message is not modified")) {
             return await ctx.answerCallbackQuery({ text: "Изменений нет" });
-        } 
-
-        // Если прошло более 48 часов или сообщение нельзя редактировать
-        if (desc.includes("message can't be edited") || desc.includes("message to edit not found")) {
-            try {
-                // 1. Пытаемся открепить старое сообщение (если оно было закреплено)
-                await ctx.unpinChatMessage(ctx.callbackQuery.message.message_id).catch(() => {
-                    console.log("Не удалось открепить (возможно, уже не в закрепе)");
-                });
-
-                // 2. Отвечаем пользователю, чтобы убрать "часики" на кнопке
-                await ctx.answerCallbackQuery({ 
-                    text: "🔄 Сообщение устарело. Обновляю и закрепляю новое...",
-                    show_alert: false 
-                });
-
-                // 3. Отправляем новое сообщение
-                const sentMsg = await ctx.reply(result.text, { 
-                    reply_markup: keyboard, 
-                    parse_mode: "HTML" 
-                });
-
-                // 4. Закрепляем новое сообщение
-                await ctx.pinChatMessage(sentMsg.message_id);
-
-            } catch (innerError) {
-                console.error("Ошибка при переотправке сообщения:", innerError.message);
-            }
-            return;
         }
-
-        console.error("Ошибка при обновлении кнопкой:", e.message);
-        await ctx.answerCallbackQuery({ text: "⚠️ Ошибка при обновлении" });
+        console.error("Ошибка обновления:", e);
     }
 });
 
