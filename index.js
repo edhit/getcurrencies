@@ -2,7 +2,6 @@ require("dotenv").config();
 const { Bot, InlineKeyboard } = require("grammy");
 const { google } = require("googleapis");
 const fs = require("fs");
-const { log } = require("console");
 
 const bot = new Bot(process.env.BOT_TOKEN);
 
@@ -15,40 +14,46 @@ const sheets = google.sheets({ version: "v4", auth: API_KEY });
 
 let cache = { text: "", lastUpdated: 0 };
 
-// Функция для обрезки строки (как вы просили через substr)
+// Парсинг списка админов из .env (например, ADMIN_USER_ID=123,456)
+const ADMINS = process.env.ADMIN_USER_ID 
+    ? process.env.ADMIN_USER_ID.split(',').map(id => parseInt(id.trim())) 
+    : [];
+
 const formatValue = (val) => {
-    if (!val) return "—";
-    
-    // 1. Превращаем строку "20,331" в число 20.331
-    let num = parseFloat(val.toString().replace(',', '.'));
-    
-    if (isNaN(num)) return "—";
-
-    // 2. Округляем ВВЕРХ до 2 знаков
-    // Умножаем на 100, округляем до целого вверх, делим на 100
-    const rounded = Math.ceil(num * 100) / 100;
-
-    // 3. Возвращаем строку с заменой точки на запятую
-    // toFixed(2) гарантирует, что будет всегда два знака (например, 20,30)
-    return rounded.toFixed(2).replace('.', ',');
+    try {
+        if (!val) return "—";
+        let num = parseFloat(val.toString().replace(',', '.'));
+        if (isNaN(num)) return "—";
+        const rounded = Math.ceil(num * 100) / 100;
+        return rounded.toFixed(2).replace('.', ',');
+    } catch (e) {
+        return "—";
+    }
 };
 
 const formatValue2 = (val) => {
-    if (!val) return "—";
-    let s = val.toString().replace('.', ','); 
-    const commaIndex = s.indexOf(',');
-    if (commaIndex === -1) return s;
-    return s.substr(0, commaIndex + 3);
+    try {
+        if (!val) return "—";
+        let s = val.toString().replace('.', ','); 
+        const commaIndex = s.indexOf(',');
+        if (commaIndex === -1) return s;
+        return s.substr(0, commaIndex + 3);
+    } catch (e) {
+        return "—";
+    }
 };
 
-// Вспомогательная функция для сравнения и выбора иконки
 const getTrend = (current, previous) => {
-    if (!previous) return "";
-    const curr = parseFloat(current.toString().replace(',', '.'));
-    const prev = parseFloat(previous.toString().replace(',', '.'));
-    if (curr > prev) return " 📈";
-    if (curr < prev) return " 📉";
-    return "";
+    try {
+        if (!previous) return "";
+        const curr = parseFloat(current.toString().replace(',', '.'));
+        const prev = parseFloat(previous.toString().replace(',', '.'));
+        if (curr > prev) return " 📈";
+        if (curr < prev) return " 📉";
+        return "";
+    } catch (e) {
+        return "";
+    }
 };
 
 async function getCurrencyRates(force = false) {
@@ -73,24 +78,28 @@ async function getCurrencyRates(force = false) {
             if (pair && value) newData[pair.trim()] = value.trim();
         });
 
-        // Загружаем старые данные из файла для сравнения
         let oldData = {};
-        if (fs.existsSync(DB_FILE)) {
-            oldData = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+        try {
+            if (fs.existsSync(DB_FILE)) {
+                oldData = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+            }
+        } catch (fileErr) {
+            console.error("Ошибка чтения файла кеша:", fileErr.message);
         }
 
-        // Основные пары
-        const sarrub = formatValue(newData["SARRUB"]);
-        const usdrub = formatValue(newData["USDRUB"]);
-        const usdsar = formatValue2(newData["USDSAR"]);
+        const sarrub = formatValue(newData["SARRUB"]) + getTrend(newData["SARRUB"], oldData["SARRUB"]);
+        const usdrub = formatValue(newData["USDRUB"]) + getTrend(newData["USDRUB"], oldData["USDRUB"]);
+        const usdsar = formatValue2(newData["USDSAR"]) + getTrend(newData["USDSAR"], oldData["USDSAR"]);
 
-        // Новые пары (СНГ)
-        const sarkgs = formatValue(newData["SARKGS"]);
-        const sarkzt = formatValue(newData["SARKZT"]);
-        const saruzs = formatValue(newData["SARUZS"]);
+        const sarkgs = formatValue(newData["SARKGS"]) + getTrend(newData["SARKGS"], oldData["SARKGS"]);
+        const sarkzt = formatValue(newData["SARKZT"]) + getTrend(newData["SARKZT"], oldData["SARKZT"]);
+        const saruzs = formatValue(newData["SARUZS"]) + getTrend(newData["SARUZS"], oldData["SARUZS"]);
 
-        // Сохраняем данные
-        fs.writeFileSync(DB_FILE, JSON.stringify(newData, null, 2));
+        try {
+            fs.writeFileSync(DB_FILE, JSON.stringify(newData, null, 2));
+        } catch (saveErr) {
+            console.error("Ошибка сохранения кеша:", saveErr.message);
+        }
 
         const timeStr = new Date().toLocaleString('ru-RU', { 
             timeZone: 'Asia/Riyadh',
@@ -98,7 +107,6 @@ async function getCurrencyRates(force = false) {
             hour: '2-digit', minute: '2-digit'
         });
 
-        // Итоговое сообщение с флагами
         let message = `🇸🇦 1 SAR = <b>${sarrub}</b> RUB 🇷🇺\n`;
         message += `🇺🇸 1 USD = <b>${usdrub}</b> RUB 🇷🇺\n`;
         message += `🇺🇸 1 USD = <b>${usdsar}</b> SAR 🇸🇦\n`;
@@ -106,73 +114,78 @@ async function getCurrencyRates(force = false) {
         message += `🇸🇦 1 SAR = <b>${sarkgs}</b> KGS 🇰🇬\n`;
         message += `🇸🇦 1 SAR = <b>${sarkzt}</b> KZT 🇰🇿\n`;
         message += `🇸🇦 1 SAR = <b>${saruzs}</b> UZS 🇺🇿\n\n`;
-        message += `<i>📊 Обновлено: ${timeStr}</i>`;
-
+        message += `<tg-emoji emoji-id=\"5462878403973619446\">🏳️‍🌈</tg-emoji> Курс <b>Google</b>\n\n`;
+        message += `<i>📊 Обновлено: ${timeStr}</i>\n`;
         
         cache.text = message;
         cache.lastUpdated = now;
 
         return { text: message, updated: true };
     } catch (error) {
-        console.error("Ошибка API:", error.message);
-        return { text: cache.text || "⚠️ Ошибка сервера", updated: false };
+        console.error("Ошибка Google Sheets API:", error.message);
+        return { text: cache.text || "⚠️ Ошибка получения данных. Попробуйте позже.", updated: false };
     }
 }
 
 const keyboard = new InlineKeyboard().text("🔄 Обновить", "refresh_rates");
 
-// 1. Список ID администраторов (узнать свой ID можно у бота @userinfobot)
-const ADMINS = [
-    parseInt(process.env.ADMIN_USER_ID.split(',')[0]), // Ваш ID
-    // Можно добавить еще ID через запятую
-];
-
-// 2. Middleware для проверки прав
 const adminOnly = async (ctx, next) => {
-    // Проверяем, есть ли ID пользователя в списке админов
-    if (ctx.from && ADMINS.includes(ctx.from.id)) {
-        return next(); // Если админ — продолжаем выполнение (вызываем команду)
-    }
-    
-    // Если не админ — вежливо отвечаем или просто игнорируем
-    if (ctx.callbackQuery) {
-        await ctx.answerCallbackQuery({
-            text: "⛔️ У вас нет прав для обновления курса.",
-            show_alert: true
-        });
-    } else {
-        await ctx.reply("❌ Эта команда доступна только администраторам.");
+    try {
+        if (ctx.from && ADMINS.includes(ctx.from.id)) {
+            return await next();
+        }
+        
+        if (ctx.callbackQuery) {
+            await ctx.answerCallbackQuery({
+                text: "⛔️ Доступ только для администраторов.",
+                show_alert: true
+            });
+        } else {
+            await ctx.reply("❌ Эта команда доступна только администраторам.");
+        }
+    } catch (e) {
+        console.error("Ошибка в middleware adminOnly:", e.message);
     }
 };
 
-// 3. Применяем middleware к команде и колбэку
 bot.command("rates", adminOnly, async (ctx) => {
-    const result = await getCurrencyRates(true);
-    await ctx.reply(result.text, { reply_markup: keyboard, parse_mode: "HTML" });
+    try {
+        const result = await getCurrencyRates(true);
+        await ctx.reply(result.text, { reply_markup: keyboard, parse_mode: "HTML", entities: [{type: "custom_emoji", emoji_id: "🏳️‍🌈", "custom_emoji_id": "5462878403973619446"}] });
+    } catch (e) {
+        console.error("Ошибка в команде /rates:", e.message);
+    }
 });
 
-bot.callbackQuery("refresh_rates", async (ctx) => {
-    const result = await getCurrencyRates();
-
-    if (!result.updated) {
-        return await ctx.answerCallbackQuery({
-            text: "✅ Данные актуальны",
-            show_alert: false 
-        });
-    }
-
+bot.callbackQuery("refresh_rates", adminOnly, async (ctx) => {
     try {
+        const result = await getCurrencyRates();
+
+        if (!result.updated) {
+            return await ctx.answerCallbackQuery({
+                text: "✅ Данные актуальны",
+                show_alert: false 
+            });
+        }
+
         await ctx.editMessageText(result.text, { reply_markup: keyboard, parse_mode: "HTML" });
         await ctx.answerCallbackQuery({ text: "✅ Обновлено" });
     } catch (e) {
         if (e.description && e.description.includes("message is not modified")) {
             await ctx.answerCallbackQuery({ text: "Изменений нет" });
         } else {
-            console.error(e);
-            await ctx.answerCallbackQuery();
+            console.error("Ошибка при обновлении кнопкой:", e.message);
+            await ctx.answerCallbackQuery({ text: "⚠️ Ошибка при обновлении" });
         }
     }
 });
 
+// Глобальный обработчик ошибок бота
+bot.catch((err) => {
+    const ctx = err.ctx;
+    console.error(`Ошибка при обработке обновления ${ctx.update.update_id}:`);
+    console.error(err.error);
+});
+
 bot.start();
-console.log("Бот запущен с системой отслеживания трендов...");
+console.log("Бот запущен и защищен от критических ошибок.");
