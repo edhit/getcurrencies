@@ -161,6 +161,7 @@ bot.callbackQuery("refresh_rates", async (ctx) => {
     try {
         const result = await getCurrencyRates();
 
+        // Если данные в кеше еще свежие
         if (!result.updated) {
             return await ctx.answerCallbackQuery({
                 text: "✅ Данные актуальны",
@@ -168,15 +169,52 @@ bot.callbackQuery("refresh_rates", async (ctx) => {
             });
         }
 
-        await ctx.editMessageText(result.text, { reply_markup: keyboard, parse_mode: "HTML" });
+        // Попытка просто обновить старое сообщение
+        await ctx.editMessageText(result.text, { 
+            reply_markup: keyboard, 
+            parse_mode: "HTML" 
+        });
+        
         await ctx.answerCallbackQuery({ text: "✅ Обновлено" });
+
     } catch (e) {
-        if (e.description && e.description.includes("message is not modified")) {
-            await ctx.answerCallbackQuery({ text: "Изменений нет" });
-        } else {
-            console.error("Ошибка при обновлении кнопкой:", e.message);
-            await ctx.answerCallbackQuery({ text: "⚠️ Ошибка при обновлении" });
+        const desc = e.description || "";
+
+        if (desc.includes("message is not modified")) {
+            return await ctx.answerCallbackQuery({ text: "Изменений нет" });
+        } 
+
+        // Если прошло более 48 часов или сообщение нельзя редактировать
+        if (desc.includes("message can't be edited") || desc.includes("message to edit not found")) {
+            try {
+                // 1. Пытаемся открепить старое сообщение (если оно было закреплено)
+                await ctx.unpinChatMessage(ctx.callbackQuery.message.message_id).catch(() => {
+                    console.log("Не удалось открепить (возможно, уже не в закрепе)");
+                });
+
+                // 2. Отвечаем пользователю, чтобы убрать "часики" на кнопке
+                await ctx.answerCallbackQuery({ 
+                    text: "🔄 Сообщение устарело. Обновляю и закрепляю новое...",
+                    show_alert: false 
+                });
+
+                // 3. Отправляем новое сообщение
+                const sentMsg = await ctx.reply(result.text, { 
+                    reply_markup: keyboard, 
+                    parse_mode: "HTML" 
+                });
+
+                // 4. Закрепляем новое сообщение
+                await ctx.pinChatMessage(sentMsg.message_id);
+
+            } catch (innerError) {
+                console.error("Ошибка при переотправке сообщения:", innerError.message);
+            }
+            return;
         }
+
+        console.error("Ошибка при обновлении кнопкой:", e.message);
+        await ctx.answerCallbackQuery({ text: "⚠️ Ошибка при обновлении" });
     }
 });
 
