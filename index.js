@@ -157,7 +157,7 @@ bot.command("rates", adminOnly, async (ctx) => {
     }
 });
 
-bot.callbackQuery("refresh_rates", adminOnly, async (ctx) => {
+bot.callbackQuery("refresh_rates", async (ctx) => {
     try {
         const result = await getCurrencyRates();
 
